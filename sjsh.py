@@ -67,7 +67,7 @@ df_2nd = as_df(courses_2nd).assign(학년="2학년")
 df_3rd = as_df(courses_3rd).assign(학년="3학년")
 
 # -------------------------
-# 표 생성/스타일 함수
+# 표 생성/스타일 함수 (버전 호환)
 # -------------------------
 def build_course_table(grade: str) -> pd.DataFrame:
     src = df_2nd if grade == "2학년" else df_3rd
@@ -75,10 +75,8 @@ def build_course_table(grade: str) -> pd.DataFrame:
     table["구분"] = f"{grade} 선택"
     table["교과(군)"] = table["교과군"]
     table["전공과목 여부"] = table["전공"].replace({"⭕": "⭕", "": ""})
-    # 개설되지 않은 학기 셀: 'X' 마킹 → 스타일에서 회색 처리
     table["1학기"] = table["학기"].apply(lambda x: "" if x == "1학기" else "X")
     table["2학기"] = table["학기"].apply(lambda x: "" if x == "2학기" else "X")
-
     view_cols = ["구분", "교과(군)", "과목유형", "과목", "학점", "전공과목 여부", "1학기", "2학기"]
     table = table[view_cols].sort_values(["교과(군)", "과목유형", "과목"]).reset_index(drop=True)
     return table
@@ -86,12 +84,16 @@ def build_course_table(grade: str) -> pd.DataFrame:
 def style_semester(df: pd.DataFrame):
     def color_unavailable(val):
         return "background-color: #C7C7C7" if val == "X" else ""
-    styler = (
-        df.style
-          .applymap(color_unavailable, subset=["1학기", "2학기"])
-          .set_properties(subset=["전공과목 여부"], **{"text-align": "center"})
-          .hide_index()
-    )
+    styler = df.style.applymap(color_unavailable, subset=["1학기", "2학기"])\
+                     .set_properties(subset=["전공과목 여부"], **{"text-align": "center"})
+    # pandas 버전에 따라 hide_index / hide(axis="index") 둘 중 가능
+    if hasattr(styler, "hide_index"):
+        styler = styler.hide_index()
+    elif hasattr(styler, "hide"):
+        try:
+            styler = styler.hide(axis="index")
+        except Exception:
+            pass
     return styler
 
 # -------------------------
@@ -103,22 +105,17 @@ def validate_selection(selected_df: pd.DataFrame, grade: str):
     df = selected_df[selected_df["학년"] == grade].copy()
     if df.empty:
         return False, f"{grade} 과목을 최소 1과목 이상 선택해야 합니다."
-
     if grade == "3학년":
-        # 사회 1과목 이상
         if df[df["교과군"] == "사회"].empty:
             return False, "3학년: 사회 교과에서 최소 1과목을 선택해야 합니다."
-        # 정보/제2외국어 요건
         ai_selected = (df["과목"] == "인공지능 일반").any()
         info_foreign = df[df["교과군"].isin(["기술가정/정보", "제2외국어/한문"])]
         if ai_selected and len(info_foreign) < 1:
             return False, "3학년: '인공지능 일반' 선택 시 정보/제2외국어 최소 1과목 필요."
         if (not ai_selected) and len(info_foreign) < 2:
             return False, "3학년: 정보/제2외국어 과목에서 최소 2과목 필요."
-        # 전공 8개 이상
         if (df["전공"] == "⭕").sum() < 8:
             return False, "3학년: 전공 과목은 최소 8개 선택해야 합니다."
-        # 30학점 이상
         total_credits = df["학점"].sum()
         if total_credits < 30:
             return False, f"3학년: 최소 30학점을 선택해야 합니다. (현재 {total_credits}학점)"
@@ -136,8 +133,7 @@ def load_db():
 def save_submission(student_id, name, grade, selected_df):
     db = load_db()
     mask = (db["학번"].astype(str) == str(student_id)) & (db["학년"] == grade)
-    db = db[~mask].copy()  # 동일 학번·학년 덮어쓰기
-
+    db = db[~mask].copy()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = []
     for _, r in selected_df.iterrows():
@@ -146,7 +142,6 @@ def save_submission(student_id, name, grade, selected_df):
         rows.append([student_id, name, grade, r["과목"], r["학점"], r["학기"],
                      r["교과군"], r["과목유형"], r["전공"], now])
     new_df = pd.DataFrame(rows, columns=BASE_COLUMNS)
-
     db = pd.concat([db, new_df], ignore_index=True)
     db.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
 
@@ -171,14 +166,15 @@ if menu == "학생 수강신청":
     # 비밀번호 게이트 (학생)
     if not st.session_state.auth_student:
         st.info("우리 학교 학생 전용 페이지입니다. 비밀번호를 입력해 주세요.")
-        pw = st.text_input("수강신청 비밀번호", type="password", placeholder="비밀번호: sjsh2025")
-        if st.button("확인"):
+        pw = st.text_input("수강신청 비밀번호", type="password", placeholder="비밀번호를 입력하세요", key="pw_student")
+        # 인증 버튼
+        if st.button("확인", key="btn_student_auth"):
             if pw == "sjsh2025":
                 st.session_state.auth_student = True
                 st.success("인증되었습니다.")
             else:
                 st.error("비밀번호가 올바르지 않습니다.")
-        st.stop()
+        st.stop()  # 인증 전에는 여기서 종료
 
     # 전체 과목표(2/3학년 동시 표시)
     st.markdown("### 전체 과목표")
@@ -238,8 +234,8 @@ else:
     # 비밀번호 게이트 (관리자)
     if not st.session_state.auth_admin:
         st.info("관리자 전용 페이지입니다. 비밀번호를 입력해 주세요.")
-        pw = st.text_input("관리자 비밀번호", type="password", placeholder="비밀번호: admin9704")
-        if st.button("확인", key="admin_auth"):
+        pw = st.text_input("관리자 비밀번호", type="password", placeholder="비밀번호를 입력하세요", key="pw_admin")
+        if st.button("확인", key="btn_admin_auth"):
             if pw == "admin9704":
                 st.session_state.auth_admin = True
                 st.success("관리자 인증되었습니다.")
