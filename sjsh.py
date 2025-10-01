@@ -60,28 +60,30 @@ courses_3rd = [
 # 검증 로직
 # -------------------------
 def validate_selection(selected_courses):
+    if len(selected_courses) == 0:
+        return False, "최소 1과목 이상 선택해야 합니다."
+    
     df = pd.DataFrame(selected_courses, columns=["교과군", "과목유형", "과목", "학점", "학기", "전공"])
     total_credits = df["학점"].sum()
 
-    # 1. 사회 필수 이수 학점 → 사회 과목 중 하나 반드시 선택
+    # 1. 사회 필수
     social_courses = df[df["교과군"] == "사회"]
     if social_courses.empty:
         return False, "사회 교과에서 최소 1과목을 선택해야 합니다."
 
-    # 2. 정보/제2외국어 필수 이수 학점
+    # 2. 정보/제2외국어 필수
     ai_selected = any(df["과목"] == "인공지능 일반")
     info_foreign = df[df["교과군"].isin(["기술가정/정보", "제2외국어/한문"])]
     if ai_selected and len(info_foreign) < 1:
-        return False, "인공지능 일반을 선택했으므로 정보/제2외국어 과목에서 최소 1과목을 선택해야 합니다."
+        return False, "인공지능 일반을 선택했으므로 정보/제2외국어 과목에서 최소 1과목 선택 필요"
     if not ai_selected and len(info_foreign) < 2:
-        return False, "정보/제2외국어 과목에서 최소 2과목을 선택해야 합니다."
+        return False, "정보/제2외국어 과목에서 최소 2과목 선택 필요"
 
-    # 3. 특목고 전공 과목 최소 8개 선택
+    # 3. 전공 과목 최소 8개
     major_courses = df[df["전공"] == "⭕"]
     if len(major_courses) < 8:
         return False, "전공 과목은 최소 8개 선택해야 합니다."
 
-    # 총 학점 기본 체크
     if total_credits < 30:
         return False, "3학년에서 최소 30학점을 선택해야 합니다."
 
@@ -104,20 +106,25 @@ if menu == "학생 수강신청":
 
     if 학번 and 이름:
         selected = []
+
         st.subheader("2학년 선택과목")
-        for c in courses_2nd:
-            if st.checkbox(f"{c[0]}-{c[1]}-{c[2]} ({c[3]}학점) {c[5]} {c[6]}", key=f"2_{c[2]}"):
+        for idx, c in enumerate(courses_2nd):
+            if st.checkbox(f"{c[0]}-{c[1]}-{c[2]} ({c[3]}학점) {c[5]}", key=f"2_{idx}"):
                 selected.append(c)
 
         st.subheader("3학년 선택과목")
-        for c in courses_3rd:
-            if st.checkbox(f"{c[0]}-{c[1]}-{c[2]} ({c[3]}학점) {c[5]} {c[6]}", key=f"3_{c[2]}"):
+        for idx, c in enumerate(courses_3rd):
+            if st.checkbox(f"{c[0]}-{c[1]}-{c[2]} ({c[3]}학점) {c[5]}", key=f"3_{idx}"):
                 selected.append(c)
 
         if st.button("수강신청 제출"):
             valid, msg = validate_selection(selected)
             if valid:
-                df = pd.read_csv(DATA_FILE)
+                try:
+                    df = pd.read_csv(DATA_FILE)
+                except pd.errors.EmptyDataError:
+                    df = pd.DataFrame(columns=["학번", "이름", "학년", "과목", "학점", "학기", "교과군", "전공"])
+                
                 for c in selected:
                     new_row = [학번, 이름, 학년, c[2], c[3], c[4], c[0], c[5]]
                     df.loc[len(df)] = new_row
@@ -132,31 +139,31 @@ if menu == "학생 수강신청":
 else:
     st.subheader("📊 관리자 페이지")
 
-    df = pd.read_csv(DATA_FILE)
+    try:
+        df = pd.read_csv(DATA_FILE)
+    except pd.errors.EmptyDataError:
+        df = pd.DataFrame(columns=["학번", "이름", "학년", "과목", "학점", "학기", "교과군", "전공"])
+
     st.dataframe(df)
 
-    # 신청 현황 그래프
     st.subheader("과목별 신청 현황")
     semester = st.selectbox("학기 선택", ["전체", "1학기", "2학기"])
     if semester != "전체":
         df_filtered = df[df["학기"] == semester]
     else:
-        df_filtered = df
+        df_filtered = df.copy()
 
-    summary = df_filtered.groupby(["과목", "학기"]).size().reset_index(name="신청 인원")
-    st.dataframe(summary)
-
-    if not summary.empty:
+    if not df_filtered.empty:
+        summary = df_filtered.groupby(["과목", "학기"]).size().reset_index(name="신청 인원")
+        st.dataframe(summary)
         fig = px.bar(summary, x="과목", y="신청 인원", color="학기", title="과목별 신청 인원")
         st.plotly_chart(fig)
 
-    # 관리자가 직접 수정 가능
     st.subheader("수강신청 내역 수정")
     edited_df = st.data_editor(df, num_rows="dynamic")
     if st.button("변경사항 저장"):
         edited_df.to_csv(DATA_FILE, index=False)
         st.success("변경사항이 저장되었습니다.")
 
-    # 전체 내역 다운로드
     st.download_button("엑셀 파일 다운로드", df.to_csv(index=False).encode("utf-8-sig"),
                        "수강신청_내역.csv", "text/csv")
