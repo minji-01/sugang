@@ -62,80 +62,59 @@ def df_with_grade(lst, grade):
     df["전공과목 여부"] = df["전공"].replace({"⭕":"⭕","":""})
     return df
 
-df2_base = df_with_grade(courses_2nd, "2학년")
-df3_base = df_with_grade(courses_3rd, "3학년")
+df2 = df_with_grade(courses_2nd, "2학년")
+df3 = df_with_grade(courses_3rd, "3학년")
+catalog_base = pd.concat([df2, df3], ignore_index=True)\
+                 .sort_values(["구분","교과군","과목유형","과목"]).reset_index(drop=True)
 
 # -------------------------
-# 보기용(색만) 표
+# 보기·선택 통합 표 만들기
 # -------------------------
-def build_catalog():
-    cat = pd.concat([df2_base, df3_base], ignore_index=True)
-    want_cols = ["구분","교과군","과목유형","과목","학점","전공과목 여부","학기","학년"]
-    # 방어: 누락 시 추가
-    for c in want_cols:
-        if c not in cat.columns:
-            cat[c] = ""
-    for c in ["2학년 1학기","2학년 2학기","3학년 1학기","3학년 2학기"]:
-        cat[c] = ""
-    cat = cat[want_cols + ["2학년 1학기","2학년 2학기","3학년 1학기","3학년 2학기"]]
-    return cat.sort_values(["구분","교과군","과목유형","과목"]).reset_index(drop=True)
+def build_selectable_catalog(student_grade: str) -> pd.DataFrame:
+    """
+    하나의 표에 '선택' 체크박스를 넣고,
+    2-1, 2-2, 3-1, 3-2 학기 칸에는 배경색 대신 '색 이모지'로 개설 여부만 표시.
+    """
+    df = catalog_base.copy()
 
-def style_catalog(df: pd.DataFrame):
-    # 색상
-    Y1, Y2, R1, R2, G = "#FFE08C", "#FFD24D", "#F5A3A3", "#E88080", "#E6E6E6"
-    cols_fixed = ["구분","교과군","과목유형","과목","학점","전공과목 여부",
-                  "2학년 1학기","2학년 2학기","3학년 1학기","3학년 2학기"]
-    dfv = df[cols_fixed].copy()
-    sem_cols = ["2학년 1학기","2학년 2학기","3학년 1학기","3학년 2학기"]
+    # 학기 칼럼들(색상 이모지로 표현) — 체크/문자 없음
+    # 2학년: 🟨/🟧, 3학년: 🟥/🟥(음영 구분 어려우니 🟥/🟥로 통일)
+    def mark_21(r): return "🟨" if (r["학년"]=="2학년" and r["학기"]=="1학기") else ""
+    def mark_22(r): return "🟧" if (r["학년"]=="2학년" and r["학기"]=="2학기") else ""
+    def mark_31(r): return "🟥" if (r["학년"]=="3학년" and r["학기"]=="1학기") else ""
+    def mark_32(r): return "🟥" if (r["학년"]=="3학년" and r["학기"]=="2학기") else ""
 
-    def color_df(subdf: pd.DataFrame):
-        # subdf는 sem_cols만 들어온 DataFrame
-        out = pd.DataFrame("", index=subdf.index, columns=subdf.columns)
-        # 원본 dfv와 인덱스 동일하므로 df의 메타 참조
-        for idx in subdf.index:
-            g = df.loc[idx, "구분"]
-            sem = df.loc[idx, "학기"]
-            if str(g).startswith("2학년"):
-                out.loc[idx, "2학년 1학기"] = f"background-color: {Y1 if sem=='1학기' else G}"
-                out.loc[idx, "2학년 2학기"] = f"background-color: {Y2 if sem=='2학기' else G}"
-                out.loc[idx, "3학년 1학기"] = f"background-color: {G}"
-                out.loc[idx, "3학년 2학기"] = f"background-color: {G}"
-            else:
-                out.loc[idx, "2학년 1학기"] = f"background-color: {G}"
-                out.loc[idx, "2학년 2학기"] = f"background-color: {G}"
-                out.loc[idx, "3학년 1학기"] = f"background-color: {R1 if sem=='1학기' else G}"
-                out.loc[idx, "3학년 2학기"] = f"background-color: {R2 if sem=='2학기' else G}"
-        return out
+    df["2학년 1학기"] = df.apply(mark_21, axis=1)
+    df["2학년 2학기"] = df.apply(mark_22, axis=1)
+    df["3학년 1학기"] = df.apply(mark_31, axis=1)
+    df["3학년 2학기"] = df.apply(mark_32, axis=1)
 
-    styler = (dfv.style
-                .apply(color_df, subset=pd.IndexSlice[:, sem_cols], axis=None)
-                .set_properties(subset=["전공과목 여부"], **{"text-align":"center"}))
-    if hasattr(styler, "hide_index"):
-        styler = styler.hide_index()
-    return styler
-
-# -------------------------
-# 선택용 표(해당 학년만 체크 가능)
-# -------------------------
-def make_selectable(df_base: pd.DataFrame):
-    df = df_base.copy()
+    # 선택 열(체크박스)
     df["선택"] = False
-    # 학기 정보(텍스트만, 체크/아이콘 없음)
-    df["2학년 1학기"] = df.apply(lambda r: "개설" if (r["학년"]=="2학년" and r["학기"]=="1학기") else "", axis=1)
-    df["2학년 2학기"] = df.apply(lambda r: "개설" if (r["학년"]=="2학년" and r["학기"]=="2학기") else "", axis=1)
-    df["3학년 1학기"] = df.apply(lambda r: "개설" if (r["학년"]=="3학년" and r["학기"]=="1학기") else "", axis=1)
-    df["3학년 2학기"] = df.apply(lambda r: "개설" if (r["학년"]=="3학년" and r["학기"]=="2학기") else "", axis=1)
+    # 현재 학생 학년만 체크 가능(다른 학년은 안내용)
+    df["선택 가능"] = df["학년"].eq(student_grade)
+
+    # 시각적 '셀 병합' 효과: 같은 구분/교과군/과목유형이 연속 반복되면 아래를 공백 처리
+    def visually_merge(df_in: pd.DataFrame, cols):
+        df_out = df_in.copy()
+        for c in cols:
+            prev = None
+            for i in df_out.index:
+                cur = df_out.at[i, c]
+                if prev == cur:
+                    df_out.at[i, c] = ""  # 빈칸으로 보이게
+                else:
+                    prev = cur
+        return df_out
+
     view_cols = ["선택","구분","교과군","과목유형","과목","학점","전공과목 여부",
                  "2학년 1학기","2학년 2학기","3학년 1학기","3학년 2학기",
-                 "학기","전공","학년"]
-    # 방어: 누락 컬럼 생성
-    for c in view_cols:
-        if c not in df.columns:
-            df[c] = ""
-    return df[view_cols].sort_values(["교과군","과목유형","과목"]).reset_index(drop=True)
+                 "학기","학년","전공","선택 가능"]
 
-df2_select = make_selectable(df2_base)
-df3_select = make_selectable(df3_base)
+    df_view = df[view_cols].copy()
+    df_view = visually_merge(df_view, ["구분","교과군","과목유형"])
+
+    return df_view
 
 # -------------------------
 # 검증(3학년 규정)
@@ -168,10 +147,9 @@ def validate_selection(selected_df: pd.DataFrame, grade: str):
 def load_db():
     try:
         df = pd.read_csv(DATA_FILE)
-        # 방어: 필수 컬럼 보장
         for c in BASE_COLUMNS:
             if c not in df.columns:
-                df[c] = "" if c not in ["학점"] else 0
+                df[c] = "" if c != "학점" else 0
         return df[BASE_COLUMNS]
     except Exception:
         return pd.DataFrame(columns=BASE_COLUMNS)
@@ -205,7 +183,7 @@ st.title("📘 고등학교 수강신청 시스템")
 menu = st.sidebar.radio("메뉴 선택", ["학생 수강신청", "관리자 모드"])
 
 # =========================
-# 학생 플로우: ①암호 → ②정보 → ③표 선택 → ④확인
+# 학생 플로우: ①암호 → ②정보 → ③표에서 체크 → ④확인
 # =========================
 if menu == "학생 수강신청":
     # ① 암호
@@ -235,30 +213,32 @@ if menu == "학생 수강신청":
     grade = st.session_state.student_meta["학년"]
     st.markdown("---")
 
-    # ③ 과목표: 통합 보기용(색만), 편집 표(선택 학년)
-    st.markdown("### 과목 개설 현황 (보기용)")
-    catalog = build_catalog()
-    st.table(style_catalog(catalog))
+    # ③ 보기·선택 통합 표 (한 개)
+    st.markdown("### 과목 개설 현황 및 수강신청 (표 내 체크)")
+    catalog = build_selectable_catalog(grade)
 
-    st.markdown(f"### {grade} 수강 과목 선택")
-    selectable_df = make_selectable(df2_base if grade=="2학년" else df3_base)
+    # data_editor 설정: 현재 학년만 체크 가능, 다른 학년은 선택 칼럼 disabled 대용 처리
+    # (Streamlit은 per-row disable을 지원하지 않아 안내 텍스트로 대체)
+    help_text = "표 안의 '선택'에 체크하세요. (현재 학년 이외의 과목은 선택해도 제출 시 제외됩니다.)"
+
     edited = st.data_editor(
-        selectable_df, hide_index=True, use_container_width=True, key="edit_selected_grade",
+        catalog, hide_index=True, use_container_width=True, key="editor_catalog",
         column_config={
-            "선택": st.column_config.CheckboxColumn("선택", help="수강할 과목을 체크"),
+            "선택": st.column_config.CheckboxColumn("선택", help=help_text, default=False),
+            "구분": st.column_config.TextColumn("구분", disabled=True),
             "교과군": st.column_config.TextColumn("교과(군)", disabled=True),
             "과목유형": st.column_config.TextColumn("과목유형", disabled=True),
-            "과목":   st.column_config.TextColumn("과목", disabled=True),
-            "학점":   st.column_config.NumberColumn("학점", step=1, disabled=True),
+            "과목": st.column_config.TextColumn("과목", disabled=True),
+            "학점": st.column_config.NumberColumn("학점", step=1, disabled=True),
             "전공과목 여부": st.column_config.TextColumn("전공과목 여부", disabled=True),
             "2학년 1학기": st.column_config.TextColumn("2학년 1학기", disabled=True),
             "2학년 2학기": st.column_config.TextColumn("2학년 2학기", disabled=True),
             "3학년 1학기": st.column_config.TextColumn("3학년 1학기", disabled=True),
             "3학년 2학기": st.column_config.TextColumn("3학년 2학기", disabled=True),
             "학기": st.column_config.TextColumn("학기", disabled=True),
-            "전공": st.column_config.TextColumn("전공", disabled=True),
             "학년": st.column_config.TextColumn("학년", disabled=True),
-            "구분": st.column_config.TextColumn("구분", disabled=True),
+            "전공": st.column_config.TextColumn("전공", disabled=True),
+            "선택 가능": st.column_config.TextColumn("선택 가능", disabled=True),
         },
     )
 
@@ -271,30 +251,30 @@ if menu == "학생 수강신청":
             if not sid or not name:
                 st.error("학번과 이름을 모두 입력해 주세요.")
             else:
-                picks_df = pd.DataFrame(edited) if isinstance(edited, pd.DataFrame) else pd.DataFrame(edited)
-                if "선택" not in picks_df.columns:
-                    st.error("선택 데이터가 올바르지 않습니다.")
+                df_sub = pd.DataFrame(edited)
+                # 선택 + 현재 학년만 제출
+                selected = df_sub[(df_sub.get("선택", False)==True) & (df_sub.get("학년","")==grade)].copy()
+
+                valid, msg = validate_selection(selected, grade)
+                if valid:
+                    try:
+                        save_submission(sid, name, grade, selected)
+                        st.success("수강신청이 완료되었습니다!")
+                        st.info(msg)
+
+                        # 확인표
+                        if not selected.empty:
+                            confirm_cols = [c for c in ["교과군","과목유형","과목","학점","학기","전공"] if c in selected.columns]
+                            confirm = selected[confirm_cols].sort_values(["교과군","과목유형","과목"]).reset_index(drop=True)
+                            st.markdown("### ✅ 제출 과목 확인")
+                            st.dataframe(confirm, use_container_width=True)
+                            st.write(f"**총 학점:** {int(selected['학점'].sum())}학점")
+                        else:
+                            st.warning("제출된 과목이 없습니다.")
+                    except Exception as e:
+                        st.error(f"저장 중 오류가 발생했습니다: {e}")
                 else:
-                    selected = picks_df[(picks_df["선택"]==True) & (picks_df["학년"]==grade)].copy()
-                    valid, msg = validate_selection(selected, grade)
-                    if valid:
-                        try:
-                            save_submission(sid, name, grade, selected)
-                            st.success("수강신청이 완료되었습니다!")
-                            st.info(msg)
-                            # 확인표
-                            if not selected.empty:
-                                confirm_cols = [c for c in ["교과군","과목유형","과목","학점","학기","전공"] if c in selected.columns]
-                                confirm = selected[confirm_cols].sort_values(["교과군","과목유형","과목"]).reset_index(drop=True)
-                                st.markdown("### ✅ 제출 과목 확인")
-                                st.dataframe(confirm, use_container_width=True)
-                                st.write(f"**총 학점:** {int(selected['학점'].sum())}학점")
-                            else:
-                                st.warning("제출된 과목이 없습니다.")
-                        except Exception as e:
-                            st.error(f"저장 중 오류가 발생했습니다: {e}")
-                    else:
-                        st.error(msg)
+                    st.error(msg)
 
 # =========================
 # 관리자 모드
@@ -322,8 +302,7 @@ else:
     if db.empty:
         st.info("아직 신청 내역이 없습니다.")
     else:
-        # 안전 그룹바이(필수 컬럼만)
-        group_cols = [c for c in ["학년","학기","교과군","과목","전공"] if c in db.columns]
+        group_cols = ["학년","학기","교과군","과목","전공"]
         counts = (db.groupby(group_cols, as_index=False)
                     .size()
                     .rename(columns={"size":"신청 인원"})
@@ -331,10 +310,9 @@ else:
         st.dataframe(counts, use_container_width=True, height=320)
 
         # 보조 그래프
-        if {"과목","학기","학년"}.issubset(counts.columns):
-            fig = px.bar(counts, x="과목", y="신청 인원", color="학기",
-                         facet_col="학년", barmode="group", title="과목별 신청 인원")
-            st.plotly_chart(fig, use_container_width=True)
+        fig = px.bar(counts, x="과목", y="신청 인원", color="학기",
+                     facet_col="학년", barmode="group", title="과목별 신청 인원")
+        st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### 수강신청 내역 수정")
     edited_db = st.data_editor(db, num_rows="dynamic", use_container_width=True, height=300)
@@ -348,6 +326,5 @@ else:
     st.download_button(
         "엑셀(CSV) 파일 다운로드",
         (db if not db.empty else pd.DataFrame(columns=BASE_COLUMNS)).to_csv(index=False).encode("utf-8-sig"),
-        "수강신청_내역.csv",
-        "text/csv"
+        "수강신청_내역.csv", "text/csv"
     )
